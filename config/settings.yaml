@@ -1,0 +1,37 @@
+# ai-video-automation settings
+# Edit this file to control what gets generated each run.
+
+output:
+  resolution: "1080x1920"   # portrait 9:16
+  fps: 30
+
+schedule:
+  videos_per_day: 4
+
+# Each "type" is a distinct content style. The GitHub Actions workflow
+# picks one type per run (round robin by default - see scripts/pick_type.py)
+types:
+  - id: anime_scene
+    label: "AI-illustrated scene (pan/zoom + music + captions)"
+    generator: scripts/generators/anime_scene.py
+    length_seconds: 20        # target length, range 15-30
+    length_range: [15, 30]
+    scenes: 4                 # number of illustrated scenes stitched together
+    caption_text: ""          # optional; leave blank for no burned-in captions
+
+  - id: macro_abstract
+    label: "Macro/abstract fluid footage (stock sourced)"
+    generator: scripts/generators/macro_abstract.py
+    length_seconds: 20
+    length_range: [10, 50]
+    stock_query: "ink water macro abstract"
+
+music:
+  # Drop royalty-free .mp3/.wav files here. A random track is chosen per video.
+  # See assets/music/README.md for free sources.
+  directory: assets/music
+
+posting:
+  platforms: ["youtube", "instagram", "facebook"]
+  # Set to false to build/test the pipeline without actually posting anywhere yet.
+  dry_run: true

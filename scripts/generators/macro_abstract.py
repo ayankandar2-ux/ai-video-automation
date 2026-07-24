@@ -62,10 +62,12 @@ def build_video(query, duration, out_path, music_dir):
         trim_clip(raw_path, trimmed_path, duration)
 
         music_path = pick_random_music(music_dir)
-        if music_path:
-            add_audio(trimmed_path, music_path, out_path)
-        else:
-            run(["cp", trimmed_path, out_path])
+        if not music_path:
+            raise RuntimeError(
+                f"No music files found in '{music_dir}'. Add at least one .mp3/.wav "
+                f"file there before running - silent videos aren't acceptable per spec."
+            )
+        add_audio(trimmed_path, music_path, out_path)
 
     return out_path
 

@@ -77,10 +77,12 @@ def build_video(theme, num_scenes, scene_duration, out_path, music_dir, resoluti
         concat_clips(clip_paths, silent_path)
 
         music_path = pick_random_music(music_dir)
-        if music_path:
-            add_audio(silent_path, music_path, out_path)
-        else:
-            run(["cp", silent_path, out_path])
+        if not music_path:
+            raise RuntimeError(
+                f"No music files found in '{music_dir}'. Add at least one .mp3/.wav "
+                f"file there before running - silent videos aren't acceptable per spec."
+            )
+        add_audio(silent_path, music_path, out_path)
 
     return out_path
 

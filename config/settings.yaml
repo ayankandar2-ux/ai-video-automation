@@ -32,6 +32,6 @@ music:
   directory: assets/music
 
 posting:
-  platforms: ["youtube", "instagram", "facebook"]
+  platforms: ["youtube", "facebook"]
   # Set to false to build/test the pipeline without actually posting anywhere yet.
   dry_run: true

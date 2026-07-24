@@ -29,9 +29,12 @@ STYLE_SUFFIX = (
 )
 
 
-def generate_image(prompt, out_path):
-    """Call the Gemini image generation API and save the result to out_path."""
+def generate_image(prompt, out_path, max_retries=4):
+    """Call the Gemini image generation API and save the result to out_path.
+    Retries with exponential backoff on rate limits (429) and transient server errors.
+    """
     import requests
+    import time
 
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY environment variable is not set.")
@@ -41,17 +44,26 @@ def generate_image(prompt, out_path):
         f"{GEMINI_IMAGE_MODEL}:generateContent?key={GEMINI_API_KEY}"
     )
     payload = {"contents": [{"parts": [{"text": prompt + STYLE_SUFFIX}]}]}
-    resp = requests.post(url, json=payload, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
 
-    # Pull the first inline image out of the response.
-    parts = data["candidates"][0]["content"]["parts"]
-    image_part = next(p for p in parts if "inlineData" in p)
-    img_bytes = base64.b64decode(image_part["inlineData"]["data"])
-    with open(out_path, "wb") as f:
-        f.write(img_bytes)
-    return out_path
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        resp = requests.post(url, json=payload, timeout=120)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            wait = min(60, 2 ** attempt)  # 2s, 4s, 8s, 16s... capped at 60s
+            print(f"[gemini] {resp.status_code} on attempt {attempt}/{max_retries}, retrying in {wait}s")
+            last_error = resp
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        parts = data["candidates"][0]["content"]["parts"]
+        image_part = next(p for p in parts if "inlineData" in p)
+        img_bytes = base64.b64decode(image_part["inlineData"]["data"])
+        with open(out_path, "wb") as f:
+            f.write(img_bytes)
+        return out_path
+
+    last_error.raise_for_status()  # exhausted retries - raise the last error clearly
 
 
 def build_video(theme, num_scenes, scene_duration, out_path, music_dir, resolution, fps):

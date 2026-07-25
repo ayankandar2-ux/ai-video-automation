@@ -72,12 +72,14 @@ def concat_clips(clip_paths, out_path):
     return out_path
 
 
-def add_audio(video_path, audio_path, out_path, music_volume=0.6):
+def add_audio(video_path, audio_path, out_path, music_volume=0.6, fade_duration=1.5):
     """Overlay a music track onto a (silent) video, trimmed to video length, with fade out."""
+    video_duration = get_duration(video_path)
+    fade_start = max(0, video_duration - fade_duration)
     cmd = [
         "ffmpeg", "-y", "-i", video_path, "-i", audio_path,
         "-filter_complex",
-        f"[1:a]volume={music_volume},afade=t=out:st=0:d=1.5[aout]",
+        f"[1:a]volume={music_volume},afade=t=out:st={fade_start}:d={fade_duration}[aout]",
         "-map", "0:v", "-map", "[aout]",
         "-c:v", "copy", "-c:a", "aac",
         "-shortest",
@@ -85,6 +87,17 @@ def add_audio(video_path, audio_path, out_path, music_volume=0.6):
     ]
     run(cmd)
     return out_path
+
+
+def get_duration(path):
+    """Return the duration of a media file in seconds, via ffprobe."""
+    import subprocess
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True, text=True, check=True,
+    )
+    return float(result.stdout.strip())
 
 
 def trim_clip(in_path, out_path, duration, start=0):

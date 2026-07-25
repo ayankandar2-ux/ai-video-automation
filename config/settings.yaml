@@ -24,7 +24,7 @@ types:
     generator: scripts/generators/macro_abstract.py
     length_seconds: 20
     length_range: [10, 50]
-    stock_query: "ink water macro abstract"
+    stock_query: "ink explosion petri dish macro"
 
 music:
   # Drop royalty-free .mp3/.wav files here. A random track is chosen per video.

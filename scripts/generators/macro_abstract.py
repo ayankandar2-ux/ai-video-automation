@@ -52,7 +52,7 @@ def download(url, out_path):
     return out_path
 
 
-def build_video(query, duration, out_path, music_dir):
+def build_video(query, duration, out_path, music_dir, music_prompt=None):
     with tempfile.TemporaryDirectory() as tmp:
         raw_path = os.path.join(tmp, "raw.mp4")
         trimmed_path = os.path.join(tmp, "trimmed.mp4")
@@ -61,12 +61,25 @@ def build_video(query, duration, out_path, music_dir):
         download(clip_url, raw_path)
         trim_clip(raw_path, trimmed_path, duration)
 
-        music_path = pick_random_music(music_dir)
+        music_path = None
+        if music_prompt:
+            try:
+                from music_gen import generate_ai_music
+                ai_music_path = os.path.join(tmp, "ai_music.wav")
+                music_path = generate_ai_music(music_prompt, ai_music_path, duration=duration)
+                print(f"[music] using AI-generated track: '{music_prompt}'")
+            except Exception as e:
+                print(f"[music] AI generation failed ({e}), falling back to royalty-free tracks")
+
         if not music_path:
-            raise RuntimeError(
-                f"No music files found in '{music_dir}'. Add at least one .mp3/.wav "
-                f"file there before running - silent videos aren't acceptable per spec."
-            )
+            music_path = pick_random_music(music_dir)
+            if not music_path:
+                raise RuntimeError(
+                    f"No music available: AI generation failed/disabled and '{music_dir}' "
+                    f"has no .mp3/.wav files. Silent videos aren't acceptable per spec."
+                )
+            print(f"[music] using royalty-free track: {music_path}")
+
         add_audio(trimmed_path, music_path, out_path)
 
     return out_path

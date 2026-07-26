@@ -53,6 +53,7 @@ def generate(type_config, config, out_path):
             duration=type_config["length_seconds"],
             out_path=out_path,
             music_dir=config["music"]["directory"],
+            music_prompt=type_config.get("music_prompt"),
         )
     else:
         raise ValueError(f"No generator wired up for type: {type_config['id']}")

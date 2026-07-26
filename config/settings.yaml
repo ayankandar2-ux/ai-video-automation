@@ -25,6 +25,7 @@ types:
     length_seconds: 20
     length_range: [10, 50]
     stock_query: "ink explosion petri dish macro"
+    music_prompt: "intense dramatic cinematic orchestral score, powerful explosive buildup, deep bass hits, epic trailer music"
 
 music:
   # Drop royalty-free .mp3/.wav files here. A random track is chosen per video.

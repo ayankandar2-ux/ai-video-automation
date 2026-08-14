@@ -141,7 +141,16 @@ def _generate_image_nvidia(prompt, out_path, max_retries=3):
 
     last_error = None
     for attempt in range(1, max_retries + 1):
-        resp = requests.post(NVIDIA_FLUX_URL, headers=headers, json=payload, timeout=120)
+        try:
+            resp = requests.post(NVIDIA_FLUX_URL, headers=headers, json=payload, timeout=180)
+        except requests.exceptions.RequestException as e:
+            # Cold-start / network flakiness on the trial endpoint - treat as
+            # retryable rather than failing the whole scene on one slow request.
+            wait = min(30, 2 ** attempt)
+            print(f"[nvidia] request error on attempt {attempt}/{max_retries} ({e}), retrying in {wait}s")
+            last_error = e
+            time.sleep(wait)
+            continue
         if resp.status_code == 429 or resp.status_code >= 500:
             wait = min(30, 2 ** attempt)
             print(f"[nvidia] {resp.status_code} on attempt {attempt}/{max_retries}, retrying in {wait}s")
@@ -169,7 +178,9 @@ def _generate_image_nvidia(prompt, out_path, max_retries=3):
             f.write(img_bytes)
         return out_path
 
-    last_error.raise_for_status()
+    if hasattr(last_error, "raise_for_status"):
+        last_error.raise_for_status()
+    raise RuntimeError(f"NVIDIA request failed after {max_retries} attempts: {last_error}")
 
 
 def generate_image(prompt, out_path, max_retries=4):

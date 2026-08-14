@@ -3,7 +3,14 @@ Generator: anime_scene
 Produces a video from N AI-illustrated still images, each animated with a
 slow pan/zoom (Ken Burns) effect, stitched together, with music overlaid.
 
-Requires env var: GEMINI_API_KEY
+Image generation tries Gemini first, then falls back to NVIDIA's hosted
+Stable Diffusion 3 endpoint if Gemini fails (quota/auth/safety-filter
+issues). If both fail, the caller (run_pipeline.py) falls back further to
+the macro_abstract generator.
+
+Requires env var: GEMINI_API_KEY (primary)
+Optional env var: NVIDIA_API_KEY (fallback - get a free one at
+    https://build.nvidia.com/settings/api-keys)
 
 Usage:
     python anime_scene.py --out output.mp4 --prompt-theme "space battle, cosmic horror"
@@ -22,6 +29,9 @@ from ffmpeg_helpers import (
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"  # update if a newer image model is available
 
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
+NVIDIA_SD3_URL = "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-3-medium"
+
 # Base style locked in so every scene looks consistent, regardless of theme.
 STYLE_SUFFIX = (
     ", dark moody anime illustration style, cinematic lighting, high detail, "
@@ -29,7 +39,7 @@ STYLE_SUFFIX = (
 )
 
 
-def generate_image(prompt, out_path, max_retries=4):
+def _generate_image_gemini(prompt, out_path, max_retries=4):
     """Call the Gemini image generation API and save the result to out_path.
     Retries with exponential backoff on rate limits (429) and transient server errors.
     """
@@ -56,6 +66,10 @@ def generate_image(prompt, out_path, max_retries=4):
             last_error = resp
             time.sleep(wait)
             continue
+        if resp.status_code == 401 or resp.status_code == 403:
+            # Not retryable - key is invalid/revoked. Fail fast so the caller
+            # can move on to the NVIDIA fallback instead of burning time here.
+            raise RuntimeError(f"Gemini auth failed ({resp.status_code}): {resp.text[:300]}")
         resp.raise_for_status()
         data = resp.json()
 
@@ -91,6 +105,85 @@ def generate_image(prompt, out_path, max_retries=4):
         return out_path
 
     last_error.raise_for_status()  # exhausted retries on HTTP errors - raise the last one clearly
+
+
+def _generate_image_nvidia(prompt, out_path, max_retries=3):
+    """Fallback image generation via NVIDIA's hosted Stable Diffusion 3
+    endpoint (free tier at build.nvidia.com). Used when Gemini fails.
+    """
+    import requests
+    import time
+
+    if not NVIDIA_API_KEY:
+        raise RuntimeError("NVIDIA_API_KEY environment variable is not set.")
+
+    headers = {
+        "Authorization": f"Bearer {NVIDIA_API_KEY}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "prompt": (prompt + STYLE_SUFFIX)[:9900],  # API caps prompt length at 10000 chars
+        "mode": "text-to-image",
+        "model": "sd3",
+        "aspect_ratio": "9:16",
+        "steps": 30,
+        "cfg_scale": 5,
+        "output_format": "jpeg",
+        "seed": 0,
+    }
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        resp = requests.post(NVIDIA_SD3_URL, headers=headers, json=payload, timeout=120)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            wait = min(30, 2 ** attempt)
+            print(f"[nvidia] {resp.status_code} on attempt {attempt}/{max_retries}, retrying in {wait}s")
+            last_error = resp
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+
+        # Response shape isn't 100% pinned down across NVIDIA's API versions -
+        # handle the couple of formats their docs/examples show.
+        data = resp.json()
+        img_b64 = None
+        if isinstance(data.get("image"), str):
+            img_b64 = data["image"]
+        elif data.get("artifacts"):
+            img_b64 = data["artifacts"][0].get("base64")
+        elif data.get("data"):
+            img_b64 = data["data"][0].get("b64_json")
+
+        if not img_b64:
+            raise RuntimeError(f"NVIDIA response had no recognizable image field: {str(data)[:300]}")
+
+        img_bytes = base64.b64decode(img_b64)
+        with open(out_path, "wb") as f:
+            f.write(img_bytes)
+        return out_path
+
+    last_error.raise_for_status()
+
+
+def generate_image(prompt, out_path, max_retries=4):
+    """Generate an image for a scene, trying Gemini first and falling back
+    to NVIDIA's free Stable Diffusion endpoint if Gemini fails outright
+    (quota exhaustion, revoked key, persistent safety-filter block, etc).
+    Raises only if both providers fail (or NVIDIA_API_KEY isn't configured).
+    """
+    try:
+        return _generate_image_gemini(prompt, out_path, max_retries=max_retries)
+    except Exception as gemini_err:
+        if not NVIDIA_API_KEY:
+            raise
+        print(f"[fallback] Gemini image generation failed ({gemini_err}); trying NVIDIA SD3")
+        try:
+            return _generate_image_nvidia(prompt, out_path)
+        except Exception as nvidia_err:
+            raise RuntimeError(
+                f"Both image providers failed. Gemini: {gemini_err} | NVIDIA: {nvidia_err}"
+            )
 
 
 def build_video(theme, num_scenes, scene_duration, out_path, music_dir, resolution, fps):

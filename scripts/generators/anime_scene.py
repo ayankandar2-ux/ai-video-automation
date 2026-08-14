@@ -30,7 +30,11 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"  # update if a newer image model is available
 
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
-NVIDIA_SD3_URL = "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-3-medium"
+# Using flux.1-schnell rather than stabilityai/stable-diffusion-3-medium:
+# SD3-medium 404s on a fresh NVIDIA account because it requires a separate
+# checkpoint/license request to Stability AI before the endpoint is enabled.
+# FLUX.1-schnell is open-weight (Apache 2.0) with no such gate.
+NVIDIA_FLUX_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell"
 
 # Base style locked in so every scene looks consistent, regardless of theme.
 STYLE_SUFFIX = (
@@ -108,8 +112,10 @@ def _generate_image_gemini(prompt, out_path, max_retries=4):
 
 
 def _generate_image_nvidia(prompt, out_path, max_retries=3):
-    """Fallback image generation via NVIDIA's hosted Stable Diffusion 3
-    endpoint (free tier at build.nvidia.com). Used when Gemini fails.
+    """Fallback image generation via NVIDIA's hosted FLUX.1-schnell endpoint
+    (free tier at build.nvidia.com, no license-approval gate). Used when
+    Gemini fails. Note: this endpoint only supports square 1024x1024 output -
+    the downstream Ken Burns/crop step handles reframing to our 9:16 target.
     """
     import requests
     import time
@@ -124,18 +130,18 @@ def _generate_image_nvidia(prompt, out_path, max_retries=3):
     }
     payload = {
         "prompt": (prompt + STYLE_SUFFIX)[:9900],  # API caps prompt length at 10000 chars
-        "mode": "text-to-image",
-        "model": "sd3",
-        "aspect_ratio": "9:16",
-        "steps": 30,
-        "cfg_scale": 5,
-        "output_format": "jpeg",
+        "mode": "base",
+        "height": 1024,
+        "width": 1024,
+        "samples": 1,
+        "steps": 4,      # schnell is a distilled fast model - 1-4 steps is its whole design point
+        "cfg_scale": 0,  # only 0 is supported for schnell
         "seed": 0,
     }
 
     last_error = None
     for attempt in range(1, max_retries + 1):
-        resp = requests.post(NVIDIA_SD3_URL, headers=headers, json=payload, timeout=120)
+        resp = requests.post(NVIDIA_FLUX_URL, headers=headers, json=payload, timeout=120)
         if resp.status_code == 429 or resp.status_code >= 500:
             wait = min(30, 2 ** attempt)
             print(f"[nvidia] {resp.status_code} on attempt {attempt}/{max_retries}, retrying in {wait}s")

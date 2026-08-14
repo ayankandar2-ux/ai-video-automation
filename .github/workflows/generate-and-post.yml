@@ -22,6 +22,8 @@ jobs:
   generate-and-post:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +39,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run pipeline
+        id: pipeline
+        continue-on-error: true
+        shell: bash
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
@@ -47,9 +52,30 @@ jobs:
           FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
           IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
-        run: python scripts/run_pipeline.py --out output.mp4 ${{ github.event.inputs.type != '' && format('--type {0}', github.event.inputs.type) || '' }}
+        run: |
+          set -o pipefail
+          python scripts/run_pipeline.py --out output.mp4 ${{ github.event.inputs.type != '' && format('--type {0}', github.event.inputs.type) || '' }} 2>&1 | tee pipeline-output.log
+
+      - name: Post pipeline log tail as commit comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAIL=$(tail -c 55000 pipeline-output.log 2>/dev/null || echo "(no log file produced)")
+          STATUS="${{ steps.pipeline.outcome }}"
+          BODY=$(printf '### Pipeline result: %s\n\n```\n%s\n```' "$STATUS" "$TAIL")
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
+            -d "$(python3 -c 'import json,sys; print(json.dumps({"body": sys.stdin.read()}))' <<< "$BODY")"
+
+      - name: Fail job if pipeline failed
+        if: steps.pipeline.outcome == 'failure'
+        run: exit 1
 
       - name: Upload artifact for inspection
+        if: steps.pipeline.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: generated-video

@@ -43,10 +43,12 @@ def generate_image(prompt, out_path, max_retries=4):
         f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{GEMINI_IMAGE_MODEL}:generateContent?key={GEMINI_API_KEY}"
     )
-    payload = {"contents": [{"parts": [{"text": prompt + STYLE_SUFFIX}]}]}
-
     last_error = None
+    last_no_image_reason = None
+    current_prompt = prompt
+
     for attempt in range(1, max_retries + 1):
+        payload = {"contents": [{"parts": [{"text": current_prompt + STYLE_SUFFIX}]}]}
         resp = requests.post(url, json=payload, timeout=120)
         if resp.status_code == 429 or resp.status_code >= 500:
             wait = min(60, 2 ** attempt)  # 2s, 4s, 8s, 16s... capped at 60s
@@ -56,14 +58,39 @@ def generate_image(prompt, out_path, max_retries=4):
             continue
         resp.raise_for_status()
         data = resp.json()
-        parts = data["candidates"][0]["content"]["parts"]
-        image_part = next(p for p in parts if "inlineData" in p)
+
+        candidates = data.get("candidates") or []
+        parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
+        image_part = next((p for p in parts if "inlineData" in p), None)
+
+        if image_part is None:
+            # No image came back - most commonly the prompt tripped a safety
+            # filter and Gemini replied with text (or an empty/blocked candidate)
+            # instead of refusing outright with an HTTP error. Don't crash: log
+            # what we actually got, back off, and retry with a softened prompt.
+            finish_reason = candidates[0].get("finishReason") if candidates else "NO_CANDIDATES"
+            text_reply = next((p.get("text") for p in parts if "text" in p), None)
+            last_no_image_reason = f"finishReason={finish_reason} text={text_reply!r}"
+            print(f"[gemini] no image in response on attempt {attempt}/{max_retries}: {last_no_image_reason}")
+
+            if attempt < max_retries:
+                wait = min(30, 2 ** attempt)
+                # Soften the prompt in case a specific word tripped the filter -
+                # drop it back to something generic and safe.
+                current_prompt = f"{prompt.split(',')[0]}, safe for all audiences"
+                time.sleep(wait)
+                continue
+            raise RuntimeError(
+                f"Gemini returned no image after {max_retries} attempts. "
+                f"Last response: {last_no_image_reason}"
+            )
+
         img_bytes = base64.b64decode(image_part["inlineData"]["data"])
         with open(out_path, "wb") as f:
             f.write(img_bytes)
         return out_path
 
-    last_error.raise_for_status()  # exhausted retries - raise the last error clearly
+    last_error.raise_for_status()  # exhausted retries on HTTP errors - raise the last one clearly
 
 
 def build_video(theme, num_scenes, scene_duration, out_path, music_dir, resolution, fps):

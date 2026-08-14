@@ -83,7 +83,23 @@ if __name__ == "__main__":
     type_config = pick_type(config, forced_type=args.type)
     print(f"Selected type: {type_config['id']}")
 
-    generate(type_config, config, args.out)
+    try:
+        generate(type_config, config, args.out)
+    except Exception as e:
+        # If the AI-generation path (anime_scene) fails - most commonly a
+        # Gemini quota/rate-limit exhaustion - don't let a single provider
+        # outage kill the whole scheduled post. Fall back to the stock-footage
+        # path instead, which has no Gemini dependency. Only do this when the
+        # type was randomly picked; if the user explicitly forced a type via
+        # --type, respect that and fail loudly instead of silently swapping.
+        if type_config["id"] == "anime_scene" and args.type is None:
+            print(f"[fallback] anime_scene failed ({e}); falling back to macro_abstract")
+            type_config = next(t for t in config["types"] if t["id"] == "macro_abstract")
+            print(f"Selected type: {type_config['id']} (fallback)")
+            generate(type_config, config, args.out)
+        else:
+            raise
+
     print(f"Generated: {args.out}")
 
     results = post_everywhere(args.out, config, title=f"{type_config['label']}")
